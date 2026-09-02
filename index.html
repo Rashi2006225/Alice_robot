@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ALICE — Service Robot Avatar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root{
+    --bg:#0F151B;
+    --panel:#161F27;
+    --panel-2:#1C2732;
+    --line: rgba(255,255,255,0.08);
+    --text:#E7ECEF;
+    --muted:#7C8B99;
+    --cyan:#5EEAD4;
+    --amber:#F5A65B;
+    --red:#E8677A;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(94,234,212,0.06), transparent 45%),
+      radial-gradient(circle at 100% 100%, rgba(245,166,91,0.05), transparent 45%),
+      var(--bg);
+    color:var(--text);
+    font-family:'Inter', sans-serif;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:28px;
+    min-height:100%;
+  }
+
+  .kiosk{
+    width:100%;
+    max-width:900px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:20px;
+    overflow:hidden;
+    box-shadow:0 30px 60px rgba(0,0,0,0.35);
+  }
+
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:16px 24px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{
+    font-family:'Space Grotesk', sans-serif;
+    font-weight:700;
+    font-size:19px;
+    letter-spacing:0.02em;
+  }
+  .brand span{color:var(--cyan);}
+  .brand-sub{
+    font-family:'JetBrains Mono', monospace;
+    font-size:11px;
+    color:var(--muted);
+    margin-top:2px;
+    letter-spacing:0.04em;
+  }
+  .status-dot{
+    display:flex;align-items:center;gap:8px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:11px;
+    color:var(--muted);
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .2s, box-shadow .2s;}
+  .dot.on{background:var(--cyan); box-shadow:0 0 10px var(--cyan);}
+
+  /* pipeline strip — the signature element: makes the NLP pipeline visible */
+  .pipeline{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    border-bottom:1px solid var(--line);
+  }
+  .stage{
+    padding:12px 10px;
+    text-align:center;
+    font-family:'JetBrains Mono', monospace;
+    font-size:10.5px;
+    letter-spacing:0.06em;
+    color:var(--muted);
+    border-right:1px solid var(--line);
+    background:var(--panel);
+    transition:background .25s, color .25s;
+    position:relative;
+  }
+  .stage:last-child{border-right:none;}
+  .stage b{display:block;font-size:9px;font-weight:400;opacity:0.6;margin-bottom:3px;}
+  .stage.active{
+    color:var(--bg);
+    background:var(--cyan);
+  }
+  .stage.active.think{background:var(--amber);}
+  .stage.active.speak{background:var(--amber);}
+
+  .main{
+    display:grid;
+    grid-template-columns:280px 1fr;
+    min-height:420px;
+  }
+  @media (max-width:640px){
+    .main{grid-template-columns:1fr;}
+  }
+
+  .avatar-panel{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:22px;
+    padding:32px 20px;
+    border-right:1px solid var(--line);
+    background:var(--panel-2);
+  }
+  @media (max-width:640px){ .avatar-panel{border-right:none; border-bottom:1px solid var(--line);} }
+
+  .avatar-wrap{ position:relative; width:180px; height:180px; }
+  .ring{
+    position:absolute; inset:0; border-radius:50%;
+    border:1px solid var(--cyan);
+    opacity:0;
+  }
+  .ring.pulse{ animation:pulse 1.6s ease-out infinite; }
+  @keyframes pulse{
+    0%{ transform:scale(0.85); opacity:0.6; }
+    100%{ transform:scale(1.35); opacity:0; }
+  }
+
+  #face{ width:180px; height:180px; display:block; }
+
+  .mic-btn{
+    width:64px; height:64px; border-radius:50%;
+    border:1px solid var(--line);
+    background:var(--panel);
+    color:var(--text);
+    cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    transition:all .2s;
+  }
+  .mic-btn:hover{ border-color:var(--cyan); }
+  .mic-btn.listening{ background:var(--cyan); border-color:var(--cyan); }
+  .mic-btn.listening svg{ stroke:var(--bg); }
+  .mic-btn svg{ width:24px; height:24px; stroke:var(--text); fill:none; stroke-width:1.6; }
+
+  .hint{
+    font-family:'JetBrains Mono', monospace;
+    font-size:10.5px;
+    color:var(--muted);
+    text-align:center;
+    letter-spacing:0.03em;
+  }
+
+  .convo-panel{
+    display:flex;
+    flex-direction:column;
+    padding:20px 22px;
+  }
+  .convo-title{
+    font-family:'Space Grotesk', sans-serif;
+    font-size:13px;
+    color:var(--muted);
+    letter-spacing:0.04em;
+    margin-bottom:14px;
+  }
+  .log{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    overflow-y:auto;
+    max-height:340px;
+    padding-right:4px;
+  }
+  .bubble{
+    max-width:82%;
+    padding:10px 14px;
+    border-radius:12px;
+    font-size:14px;
+    line-height:1.45;
+  }
+  .bubble.user{
+    align-self:flex-end;
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-bottom-right-radius:3px;
+  }
+  .bubble.bot{
+    align-self:flex-start;
+    background:rgba(94,234,212,0.08);
+    border:1px solid rgba(94,234,212,0.25);
+    border-bottom-left-radius:3px;
+  }
+  .bubble .who{
+    font-family:'JetBrains Mono', monospace;
+    font-size:9.5px;
+    color:var(--muted);
+    margin-bottom:4px;
+    letter-spacing:0.05em;
+  }
+  .empty-log{
+    color:var(--muted);
+    font-size:13px;
+    margin-top:auto;
+    margin-bottom:auto;
+    text-align:center;
+    font-family:'JetBrains Mono', monospace;
+  }
+  .log::-webkit-scrollbar{width:6px;}
+  .log::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
+
+  .unsupported{
+    margin:18px 22px 0;
+    padding:12px 14px;
+    border:1px solid rgba(232,103,122,0.35);
+    background:rgba(232,103,122,0.08);
+    color:var(--red);
+    border-radius:10px;
+    font-size:12.5px;
+    display:none;
+  }
+</style>
+</head>
+<body>
+
+<div class="kiosk">
+  <div class="topbar">
+    <div>
+      <div class="brand">ALICE <span>· service robot avatar</span></div>
+      <div class="brand-sub">STT → NLP INTENT → TTS DEMO</div>
+    </div>
+    <div class="status-dot"><span class="dot" id="listenDot"></span><span id="statusText">idle</span></div>
+  </div>
+
+  <div class="pipeline">
+    <div class="stage" data-stage="listen"><b>01</b>LISTEN</div>
+    <div class="stage" data-stage="understand"><b>02</b>UNDERSTAND</div>
+    <div class="stage" data-stage="think"><b>03</b>THINK</div>
+    <div class="stage" data-stage="speak"><b>04</b>SPEAK</div>
+  </div>
+
+  <div class="unsupported" id="unsupportedMsg">
+    Ye browser Speech Recognition support nahi karta. Chrome ya Edge pe kholiye is demo ko.
+  </div>
+
+  <div class="main">
+    <div class="avatar-panel">
+      <div class="avatar-wrap">
+        <div class="ring" id="ring1"></div>
+        <div class="ring" id="ring2"></div>
+        <svg id="face" viewBox="0 0 200 200">
+          <circle cx="100" cy="100" r="92" fill="#101820" stroke="#28343E" stroke-width="2"/>
+          <circle cx="68" cy="86" r="7" fill="#5EEAD4" id="eyeL"/>
+          <circle cx="132" cy="86" r="7" fill="#5EEAD4" id="eyeR"/>
+          <path id="mouth" d="M 70 130 Q 100 130 130 130" stroke="#5EEAD4" stroke-width="5" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <button class="mic-btn" id="micBtn" title="Tap to talk">
+        <svg viewBox="0 0 24 24" id="micIcon">
+          <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/>
+          <path d="M19 11a7 7 0 0 1-14 0"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+        </svg>
+      </button>
+      <div class="hint" id="hintText">TAP MIC &amp; SPEAK</div>
+    </div>
+
+    <div class="convo-panel">
+      <div class="convo-title">Conversation log</div>
+      <div class="log" id="log">
+        <div class="empty-log">Koi conversation nahi hui abhi.<br>Mic dabao aur "hello" bolo.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- NLP via Groq LLM (backend proxy) ----------
+// Pehle ye keyword-matching thi, ab backend ka /chat endpoint LLM se
+// jawab generate karta hai — isliye ab robot fixed sawaalon tak limited nahi hai.
+const CHAT_BACKEND_URL = 'http://localhost:3001/chat';
+
+async function getReply(text){
+  try{
+    const res = await fetch(CHAT_BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await res.json();
+    if(!res.ok){
+      console.error('Chat backend error:', data.error);
+      return 'Sorry, mujhe abhi jawab dene mein dikkat aa rahi hai.';
+    }
+    return data.reply;
+  } catch(err){
+    console.error('Chat backend unreachable:', err.message);
+    return 'Backend se connect nahi ho paya. Kya server chal raha hai?';
+  }
+}
+
+// ---------- UI wiring ----------
+const micBtn = document.getElementById('micBtn');
+const statusText = document.getElementById('statusText');
+const listenDot = document.getElementById('listenDot');
+const log = document.getElementById('log');
+const ring1 = document.getElementById('ring1');
+const ring2 = document.getElementById('ring2');
+const hintText = document.getElementById('hintText');
+const mouth = document.getElementById('mouth');
+const stages = document.querySelectorAll('.stage');
+
+function setStage(name){
+  stages.forEach(s => {
+    s.classList.remove('active','think','speak');
+    if(s.dataset.stage === name){
+      s.classList.add('active');
+      if(name === 'think' || name === 'speak') s.classList.add(name);
+    }
+  });
+  if(!name) stages.forEach(s => s.classList.remove('active','think','speak'));
+}
+
+function addBubble(who, text){
+  const empty = log.querySelector('.empty-log');
+  if(empty) empty.remove();
+  const b = document.createElement('div');
+  b.className = 'bubble ' + (who === 'You' ? 'user' : 'bot');
+  b.innerHTML = '<div class="who">' + who + '</div>' + text;
+  log.appendChild(b);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setStatus(s){ statusText.textContent = s; }
+
+// ---------- Speech-to-Text via Groq Whisper (backend proxy) ----------
+// Yahan backend server ka URL daalo. Local testing ke liye default localhost:3001 hai.
+const STT_BACKEND_URL = 'http://localhost:3001/transcribe';
+
+let mediaRecorder = null;
+let audioChunks = [];
+let recording = false;
+
+if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+  document.getElementById('unsupportedMsg').style.display = 'block';
+  document.getElementById('unsupportedMsg').textContent =
+    'Ye browser microphone recording support nahi karta.';
+}
+
+async function startRecording(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = (e) => {
+      if(e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach(track => track.stop()); // mic release karo
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      sendToBackend(audioBlob);
+    };
+
+    mediaRecorder.start();
+    recording = true;
+    micBtn.classList.add('listening');
+    ring1.classList.add('pulse');
+    ring2.classList.add('pulse');
+    ring2.style.animationDelay = '0.5s';
+    listenDot.classList.add('on');
+    setStatus('recording…');
+    setStage('listen');
+    hintText.textContent = 'RECORDING… TAP TO STOP';
+  } catch(err){
+    setStatus('mic error: ' + err.message);
+  }
+}
+
+function stopRecording(){
+  if(mediaRecorder && recording){
+    mediaRecorder.stop();
+  }
+  recording = false;
+  micBtn.classList.remove('listening');
+  ring1.classList.remove('pulse');
+  ring2.classList.remove('pulse');
+  listenDot.classList.remove('on');
+  hintText.textContent = 'TRANSCRIBING…';
+  setStatus('transcribing…');
+}
+
+async function sendToBackend(audioBlob){
+  const formData = new FormData();
+  formData.append('audio', audioBlob, 'recording.webm');
+
+  try{
+    const res = await fetch(STT_BACKEND_URL, { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if(!res.ok){
+      setStatus('STT error: ' + (data.error || 'unknown'));
+      hintText.textContent = 'TAP MIC & SPEAK';
+      return;
+    }
+
+    const transcript = (data.text || '').trim();
+    hintText.textContent = 'TAP MIC & SPEAK';
+    setStatus('idle');
+
+    if(transcript){
+      addBubble('You', transcript);
+      handleUtterance(transcript);
+    } else {
+      setStatus('kuch sunai nahi diya, dobara try karo');
+    }
+  } catch(err){
+    setStatus('backend se connect nahi ho paya');
+    hintText.textContent = 'TAP MIC & SPEAK';
+  }
+}
+
+micBtn.addEventListener('click', () => {
+  if(recording){ stopRecording(); return; }
+  startRecording();
+});
+
+// ---------- NLP + TTS pipeline ----------
+async function handleUtterance(text){
+  setStage('understand');
+  setStatus('understanding…');
+
+  setStage('think');
+  setStatus('thinking…');
+
+  const reply = await getReply(text);
+
+  addBubble('ALICE', reply);
+  speak(reply);
+}
+
+function speak(text){
+  setStage('speak');
+  setStatus('speaking…');
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'en-IN';
+  utter.rate = 0.98;
+
+  utter.onstart = () => { animateMouth(true); };
+  utter.onend = () => {
+    animateMouth(false);
+    setStage(null);
+    setStatus('idle');
+  };
+  utter.onerror = () => {
+    animateMouth(false);
+    setStage(null);
+    setStatus('idle');
+  };
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+}
+
+// ---------- Mouth lip-sync animation (simple oscillation while speaking) ----------
+let mouthAnimId = null;
+function animateMouth(active){
+  if(active){
+    let t = 0;
+    const loop = () => {
+      t += 0.35;
+      const open = Math.abs(Math.sin(t)) * 18 + 4;
+      mouth.setAttribute('d', `M 70 128 Q 100 ${128 + open} 130 128`);
+      mouthAnimId = requestAnimationFrame(loop);
+    };
+    loop();
+  } else {
+    if(mouthAnimId) cancelAnimationFrame(mouthAnimId);
+    mouth.setAttribute('d', 'M 70 130 Q 100 130 130 130');
+  }
+}
+
+// gentle idle blink
+setInterval(() => {
+  const eyeL = document.getElementById('eyeL');
+  const eyeR = document.getElementById('eyeR');
+  eyeL.setAttribute('ry','1'); eyeR.setAttribute('ry','1');
+  eyeL.setAttribute('r','1'); eyeR.setAttribute('r','1');
+  setTimeout(() => {
+    eyeL.setAttribute('r','7'); eyeR.setAttribute('r','7');
+  }, 140);
+}, 4200);
+</script>
+
+</body>
+</html>
