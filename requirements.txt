@@ -1,0 +1,17 @@
+# Server
+fastapi
+uvicorn[standard]
+python-multipart      # UploadFile ke liye ZAROORI, iske bina /transcribe crash hota hai
+pydantic>=2
+python-dotenv
+
+# AI services
+groq
+langchain-core
+langchain-groq
+elevenlabs
+
+# Sirf robot ke direct mic ke liye (recorder.py). Browser demo ke liye zaroori nahi.
+# Windows pe webrtcvad build error de to: pip install webrtcvad-wheels
+sounddevice
+webrtcvad

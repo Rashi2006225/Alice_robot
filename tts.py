@@ -1,199 +1,122 @@
-import re
-import unicodedata
+import logging
+import threading
+import time
+from collections import OrderedDict
+from typing import Optional
 
 from elevenlabs.client import ElevenLabs
-from elevenlabs.play import play
 
-from tts_config import API_KEY, VOICE_ID, MODEL_ID
+# CHANGE: clean_text ab text_cleaner.py mein hai.
+# WHY:    Hindi bug fix + LLM ko ElevenLabs se alag karna.
+from text_cleaner import clean_text
+
+from tts_config import (
+    API_KEY,
+    MODEL_ID,
+    OUTPUT_FORMAT,
+    TTS_CACHE_SIZE,
+    TTS_MAX_CHARS,
+    TTS_MAX_CONCURRENCY,
+    VOICE_ID,
+)
+
+log = logging.getLogger("alice.tts")
 
 
 class TTS:
     def __init__(self):
         if not API_KEY:
             raise ValueError("ELEVENLABS_API_KEY is not set.")
-        self.client = ElevenLabs(api_key=API_KEY)
+        self.client = ElevenLabs(api_key=API_KEY, timeout=30)
 
-    # ------------------------------------------------------------------
-    # Text cleaning
-    # ------------------------------------------------------------------
-    @staticmethod
-    def clean_text(text: str) -> str:
-        """Turn LLM/markdown output into plain text a voice reads naturally."""
+        # CHANGE: semaphore + cache naye.
+        # WHY:    frontend har sentence ke liye /tts parallel bhejta hai. Semaphore unhe
+        #         line mein lagata hai (429 error nahi), cache repeated phrases ke credits bachata hai.
+        self._slots = threading.BoundedSemaphore(TTS_MAX_CONCURRENCY)
+        self._cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+        self._cache_lock = threading.Lock()
 
-        if not text:
-            return ""
+    # Purane code ke saath compatible: TTS.clean_text(...) abhi bhi chalega
+    clean_text = staticmethod(clean_text)
 
-        # 0. Normalize unicode lookalikes (full-width pipe etc.)
-        text = unicodedata.normalize("NFKC", text)
-        text = re.sub(r"[∣¦│┃｜]", "|", text)
+    def synthesize(
+        self, text: str, voice_id: str = VOICE_ID, model_id: str = MODEL_ID
+    ) -> Optional[bytes]:
+        """
+        NAYA: text -> mp3 BYTES (ya fail hone par None).
 
-        # 1. HTML: <br> becomes a pause, every other tag is removed completely
-        text = re.sub(r"<\s*br\s*/?\s*>", ". ", text, flags=re.IGNORECASE)
-        text = re.sub(r"</?[a-zA-Z][^>]*>", " ", text)
-
-        # 2. Fenced code blocks
-        text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
-
-        # 3. Markdown images and links -> keep only the visible text
-        text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
-        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
-
-        # 4. URLs
-        text = re.sub(r"https?://\S+|www\.\S+", "", text)
-
-        # 5. Table separator rows ANYWHERE (even inside one long line):
-        #    |---------|:-----:|-----|
-        text = re.sub(
-            r"\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?", " . ", text
-        )
-
-        # 6. Line-level markdown
-        lines = []
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if re.fullmatch(r"([-*_=]\s*){3,}", line):
-                continue
-            line = re.sub(r"^#{1,6}\s*", "", line)
-            line = re.sub(r"^>+\s*", "", line)
-            line = re.sub(r"^[-*•+]\s+", "", line)
-            line = re.sub(r"^\d+[.)]\s+", "", line)
-            line = line.strip(" ,|")
-            if not line:
-                continue
-            if line[-1] not in ".!?:;":
-                line += "."
-            lines.append(line)
-        text = " ".join(lines)
-
-        # 7. Pipes anywhere (table cells) -> pause
-        text = re.sub(r"\s*\|\s*", ", ", text)
-
-        # 8. Inline bullets and emphasis markers
-        text = text.replace("•", ". ").replace("·", ". ")
-        text = re.sub(r"[*`~#]", "", text)
-        text = text.replace("_", " ")
-
-        # 9. Context-aware symbols
-        text = re.sub(r"\$\s*(\d[\d,]*(?:\.\d+)?)", r"\1 dollars", text)
-        text = re.sub(r"₹\s*(\d[\d,]*(?:\.\d+)?)", r"\1 rupees", text)
-        text = re.sub(r"(\d)\s*%", r"\1 percent", text)
-        text = re.sub(r"(?<=[A-Za-z])/(?=[A-Za-z])", " or ", text)
-
-        replacements = {
-            "&": " and ", "@": " at ", "%": " percent ", "=": " equals ",
-            "+": " plus ", "→": " to ", "←": " from ",
-            "—": ", ", "–": ", ", "…": ".",
-            "/": " ", "\\": " ",
-            "(": ", ", ")": ", ",
-            "[": " ", "]": " ", "{": " ", "}": " ", "<": " ", ">": " ",
-            "“": "", "”": "", '"': "", "‘": "'", "’": "'",
-        }
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-
-        # 10. Standalone dashes -> pause (hyphens inside words stay)
-        text = re.sub(r"\s-+\s", ", ", text)
-
-        # 11. STRICT WHITELIST: only letters, digits, spaces, basic punctuation
-        text = re.sub(r"[^\w\s.,?!:;'\-]", "", text)
-        text = text.replace("_", " ")
-
-        # 12. Leftover hyphens not inside a word
-        text = re.sub(r"-{2,}", " ", text)
-        text = re.sub(r"(?<!\w)-+|-+(?!\w)", " ", text)
-
-        # 13. Tidy punctuation and spaces
-        text = re.sub(r"\s+([.,?!:;])", r"\1", text)
-        text = re.sub(r"([,;:])(\s*[,;:])+", r"\1", text)
-        text = re.sub(r"([,;:])\s*(?=[.?!])", "", text)
-        text = re.sub(r"\.(\s*\.)+", ".", text)
-        text = re.sub(r"[.]\s*,", ".", text)
-        text = re.sub(r"\s+", " ", text)
-
-        return text.strip(" ,;:")
-
-    # ------------------------------------------------------------------
-    # Generation
-    # ------------------------------------------------------------------
-    def _generate(
-        self,
-        text: str,
-        voice_id: str = VOICE_ID,
-        model_id: str = MODEL_ID,
-    ):
-        """Clean text and generate speech audio."""
-
-        text = self.clean_text(text)
-
+        CHANGE: pehle ElevenLabs ka lazy generator return hota tha jo baad mein iterate hota tha.
+        WHY:    network error iterate karte waqt aata tha, aur kisi try/except ke andar nahi hota tha
+                (-> server 500). Ab yahin poora audio jama karte hain, to har error yahin pakda jaata hai.
+        """
+        text = clean_text(text)[:TTS_MAX_CHARS]
         if not text:
             return None
 
-        try:
-            return self.client.text_to_speech.convert(
-                text=text,
-                voice_id=voice_id,
-                model_id=model_id,
-                output_format="mp3_44100_128",
-            )
-        except Exception as e:
-            print(f"TTS generation failed: {e}")
+        key = (voice_id, model_id, text)
+        with self._cache_lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+
+        audio = None
+        with self._slots:                       # max N requests ek saath
+            for attempt in range(3):            # 429 pe thoda ruk ke dobara try
+                try:
+                    stream = self.client.text_to_speech.convert(
+                        voice_id=voice_id,
+                        text=text,
+                        model_id=model_id,
+                        output_format=OUTPUT_FORMAT,
+                    )
+                    audio = b"".join(stream)
+                    break
+                except Exception as e:
+                    rate_limited = getattr(e, "status_code", None) == 429
+                    log.warning("TTS attempt %d failed: %s", attempt + 1, e)
+                    if rate_limited and attempt < 2:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    break
+
+        if not audio:
             return None
 
-    def speak(
-        self,
-        text: str,
-        voice_id: str = VOICE_ID,
-        model_id: str = MODEL_ID,
-    ):
-        """Generate and play speech."""
+        with self._cache_lock:
+            self._cache[key] = audio
+            while len(self._cache) > TTS_CACHE_SIZE:
+                self._cache.popitem(last=False)
+        return audio
 
-        audio = self._generate(text, voice_id, model_id)
+    def speak(self, text: str, voice_id: str = VOICE_ID, model_id: str = MODEL_ID):
+        """Laptop ke speaker pe seedha bajao (terminal testing)."""
+        audio = self.synthesize(text, voice_id, model_id)
         if audio is None:
             return
-
         try:
+            # CHANGE: play import yahin andar kiya.
+            # WHY:    elevenlabs.play ko mpv / ffmpeg chahiye. Top pe import hota to jin
+            #         logon ke paas ye nahi, unka poora server import pe hi fail ho jaata.
+            from elevenlabs.play import play
             play(audio)
         except Exception as e:
-            print(f"Audio playback failed: {e}")
+            log.error("Audio playback failed: %s", e)
 
-    def save(
-        self,
-        text: str,
-        filename: str,
-        voice_id: str = VOICE_ID,
-        model_id: str = MODEL_ID,
-    ):
-        """Generate speech and save it to an MP3 file."""
-
-        audio = self._generate(text, voice_id, model_id)
+    def save(self, text: str, filename: str, voice_id: str = VOICE_ID, model_id: str = MODEL_ID):
+        """MP3 file mein save karo. Fail hone par None."""
+        audio = self.synthesize(text, voice_id, model_id)
         if audio is None:
             return None
-
         try:
             with open(filename, "wb") as f:
-                for chunk in audio:
-                    f.write(chunk)
-            print(f"Saved to {filename}")
+                f.write(audio)
+            log.info("Saved to %s", filename)
             return filename
         except OSError as e:
-            print(f"Failed to save audio: {e}")
+            log.error("Failed to save audio: %s", e)
             return None
 
 
 if __name__ == "__main__":
-    sample = (
-        "Sure! The “best” algorithm depends mainly on the type of problem "
-        "you’re solving. Here’s a quick cheat-sheet: | Problem | Typical "
-        "Algorithms | When to Pick Them | |---------|-------------------|"
-        "-------------------| | **Binary / Multi-class Classification** | "
-        "• Logistic regression (fast, interpretable) <br>• Random Forest / "
-        "Extra Trees (handles non-linearities) <br>• Gradient-Boosted Trees "
-        "(XGBoost, LightGBM, CatBoost – top performers) <br>• Support Vector "
-        "Machine (good with small data) | • Use logistic regression for a "
-        "quick baseline or when you need coefficients. <br>• Use tree-based "
-        "models when you want feature importance. <br>• Use SVM when you "
-        "have a clear margin. |"
-    )
-    print(TTS.clean_text(sample))
+    # Chhota test (clean_text ElevenLabs ke bina bhi chalta hai)
+    print(clean_text("नमस्ते! **Price** ₹500 hai | 50% off 😀"))

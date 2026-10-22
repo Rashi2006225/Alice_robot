@@ -355,7 +355,9 @@ async function request(url, options, signal, errors) {
   }
   if (!res.ok) {
     let detail = '';
-    try { detail = (await res.clone().json()).error || ''; } catch (_) { /* not JSON */ }
+    // CHANGE: .error ke saath .detail bhi padha.
+    // WHY: FastAPI error "detail" naam se bhejta hai, to console mein asli wajah dikhti hai.
+    try { const j = await res.clone().json(); detail = String(j.error || j.detail || ''); } catch (_) { /* not JSON */ }
     console.error(`${url} -> ${res.status}`, detail);
     throw new AppError(errors.http);
   }
@@ -457,7 +459,9 @@ const Playback = (() => {
     return new Promise((resolve, reject) => {
       if (!('speechSynthesis' in window)) return reject(new AppError('no tts'));
       const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'en-IN';
+      // CHANGE: text mein Devanagari ho to 'hi-IN' voice.
+      // WHY: Hindi text ko en-IN voice galat / ajeeb tareeke se padhti hai (fallback voice ke time).
+      utter.lang = /[\u0900-\u097F]/.test(text) ? 'hi-IN' : 'en-IN';
       utter.rate = 0.98;
       settle = resolve;
       utter.onend = () => { settle = null; resolve(true); };
